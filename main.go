@@ -14,7 +14,7 @@ import (
     "time"
 )
 
-//go:embed index.html
+//go:embed Dental_Patient_Management_Software.html
 var indexHTML []byte
 
 var emptyDB = map[string]any{
@@ -31,15 +31,19 @@ func dataFile() string {
     _ = os.MkdirAll(dir, 0700)
     return filepath.Join(dir, "patient-data.json")
 }
+
 func ensureDB(p string) {
     if _, err := os.Stat(p); err == nil { return }
     b, _ := json.MarshalIndent(emptyDB, "", "  ")
     _ = os.WriteFile(p, b, 0600)
 }
+
 func readDB(p string) []byte {
-    b, err := os.ReadFile(p); if err != nil { b, _ = json.Marshal(emptyDB) }
+    b, err := os.ReadFile(p)
+    if err != nil { b, _ = json.Marshal(emptyDB) }
     return b
 }
+
 func writeDB(p string, r io.Reader) error {
     var v any
     if err := json.NewDecoder(r).Decode(&v); err != nil { return err }
@@ -48,39 +52,56 @@ func writeDB(p string, r io.Reader) error {
     if err := os.WriteFile(tmp, b, 0600); err != nil { return err }
     return os.Rename(tmp, p)
 }
+
 func openApp(url string) {
     if runtime.GOOS != "windows" { return }
+    // Edge/Chrome application mode gives the HTML software a desktop-app window
+    // without normal browser tabs or an address bar.
     for _, browser := range []string{"msedge.exe", "chrome.exe"} {
         if _, err := exec.LookPath(browser); err == nil {
-            _ = exec.Command(browser, "--app="+url, "--new-window").Start(); return
+            _ = exec.Command(browser, "--app="+url, "--new-window", "--disable-features=TranslateUI").Start()
+            return
         }
     }
     _ = exec.Command("cmd", "/c", "start", "", url).Start()
 }
+
 func main() {
-    db := dataFile(); ensureDB(db)
+    db := dataFile()
+    ensureDB(db)
+
     mux := http.NewServeMux()
     mux.HandleFunc("/api/db", func(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Access-Control-Allow-Origin", "*")
         w.Header().Set("Content-Type", "application/json")
         switch r.Method {
-        case http.MethodGet: _, _ = w.Write(readDB(db))
+        case http.MethodGet:
+            _, _ = w.Write(readDB(db))
         case http.MethodPut:
-            if err := writeDB(db, r.Body); err != nil { http.Error(w, `{"ok":false}`, 400); return }
+            if err := writeDB(db, r.Body); err != nil {
+                http.Error(w, `{"ok":false}`, http.StatusBadRequest)
+                return
+            }
             _, _ = w.Write([]byte(`{"ok":true}`))
-        default: http.Error(w, "method not allowed", 405)
+        default:
+            http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
         }
     })
+
     mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-        if r.URL.Path != "/" && r.URL.Path != "/index.html" { http.NotFound(w, r); return }
+        if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+            http.NotFound(w, r)
+            return
+        }
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         _, _ = w.Write(indexHTML)
     })
+
     ln, err := net.Listen("tcp", "127.0.0.1:0")
     if err != nil { panic(err) }
     srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
     url := fmt.Sprintf("http://%s/", ln.Addr().String())
-    go func(){ _ = srv.Serve(ln) }()
+    go func() { _ = srv.Serve(ln) }()
     openApp(url)
     select {}
 }
