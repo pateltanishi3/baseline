@@ -3,6 +3,8 @@ name: Build Windows Installer
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -15,10 +17,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install ImageMagick
+        shell: pwsh
+        run: choco install imagemagick --yes --no-progress
+
+      - name: Create Windows icon resources
+        shell: pwsh
+        run: |
+          magick app-icon.svg -background none -define icon:auto-resize=256,128,64,48,32,16 app-icon.ico
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache: true
+
+      - name: Download Go dependencies
+        shell: pwsh
+        run: go mod tidy
+
+      - name: Install Windows resource tool
+        shell: pwsh
+        run: go install github.com/tc-hib/go-winres@v0.3.3
+
+      - name: Embed Windows app icon and version resources
+        shell: pwsh
+        run: go-winres make --file-version=1.0.0.0 --product-version=1.0.0.0
 
       - name: Build Windows application
         shell: pwsh
@@ -35,6 +59,21 @@ jobs:
         shell: pwsh
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" AmitPatelDentalSoftware.iss
+
+      - name: Smoke test installer
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "AmitPatelDentalSoftware-Test"
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+          $setup = Get-ChildItem dist\*.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$installDir" -Wait
+          $app = Join-Path $installDir "AmitPatelDentalSoftware.exe"
+          if (!(Test-Path $app)) { throw "Installed application was not found at $app" }
+          $p = Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 6
+          if ($p.HasExited) { throw "Installed application exited during smoke test" }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "Installer install + application launch smoke test passed."
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
