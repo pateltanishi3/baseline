@@ -1,13 +1,24 @@
-# Amit Patel Dental Software — Master Baseline
+# Amit Patel Dental Software
 
-The approved master baseline is the uploaded dental patient-management HTML from this ChatGPT project. A Windows desktop executable has been built from that exact baseline.
+## Master baseline
 
-## Local Windows build
+`Dental_Patient_Management_Software.html` is the approved master HTML baseline. It is embedded directly into the Windows application, so the application UI and existing functionality remain based on this file.
 
-The executable runs a small localhost database service and opens the baseline in an app-style Edge/Chrome window. Patient data is stored locally in the Windows user configuration directory under `Amit Patel Dental Software/patient-data.json`.
+## Windows desktop build
 
-## Source
+`main.go` is a small Windows desktop wrapper around the master HTML. It provides the existing `/api/db` interface through a localhost service and launches the application in Edge/Chrome app mode, with no normal browser tabs or address bar when Edge or Chrome is installed.
 
-`main.go` is the Windows desktop launcher/database wrapper. The master `index.html` is preserved in the downloadable project package produced with the build.
+Patient data is stored locally in the Windows user configuration directory under `Amit Patel Dental Software\patient-data.json`.
 
-Future software changes must start from the approved master baseline and preserve existing functionality unless explicitly requested otherwise.
+## Professional Windows installer
+
+GitHub Actions builds a Windows installer using Go and Inno Setup.
+
+- Push to `main` or manually run the workflow to build a Windows installer artifact.
+- Push a version tag such as `v1.0.0` to automatically create a GitHub Release and attach the installer.
+- The installer creates Desktop and Start Menu shortcuts.
+- The installer can launch the software immediately after installation.
+
+## Versioning
+
+Use semantic version tags (`v1.0.0`, `v1.1.0`, `v2.0.0`) for public releases. Future feature changes should start from the approved master baseline and preserve existing functionality unless explicitly requested otherwise.
