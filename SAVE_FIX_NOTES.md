@@ -1,0 +1,1 @@
+Temporary recovery note: the current master HTML is restored from the original baseline blob after an intermediate test update. The database-save race is being fixed in the Windows Go wrapper first, without altering the master HTML UI/functionality.
