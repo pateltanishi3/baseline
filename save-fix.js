@@ -56,5 +56,9 @@
     try{updateSuggestions();}catch(e){}
   };
 
+  // Use the Windows local calendar date, not UTC. This avoids a date rollover
+  // mismatch around midnight for Indian local time.
+  window.todayISO=function(){const d=new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return y+'-'+m+'-'+day;};
+
   window.addEventListener('beforeunload',function(){try{persistDB();}catch(e){}});
 })();
