@@ -1,64 +1,92 @@
-// Durable-save layer injected by the Windows wrapper.
-// It serializes snapshots, keeps a recovery copy, and prevents a stale
-// auto-save from replacing a newer manual save.
-(function(){
-  const CACHE_KEY='amit_patel_dental_save_cache_v1';
-  let version=0;
-  let queue=Promise.resolve();
+(() => {
+  const RECOVERY_KEY = 'amit_patel_dental_recovery_v2';
+  let writeChain = Promise.resolve();
+  let version = 0;
 
-  function cloneDB(){
-    try{return JSON.parse(JSON.stringify(db));}catch(e){return null;}
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const setStatus = text => { const el = document.getElementById('serverStatus'); if (el) el.textContent = text; };
+
+  function cacheSnapshot(snapshot) {
+    try {
+      localStorage.setItem(RECOVERY_KEY, JSON.stringify({
+        version,
+        savedAt: new Date().toISOString(),
+        data: snapshot
+      }));
+    } catch (_) {}
   }
-  function cacheSnapshot(payload){try{localStorage.setItem(CACHE_KEY,JSON.stringify(payload));}catch(e){}}
-  function readCache(){try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'null');}catch(e){return null;}}
 
-  window.persistDB=function(){
-    const payload=cloneDB();
-    if(!payload)return Promise.resolve();
-    const next=Math.max(++version,Date.now());
-    payload._meta={version:next,savedAt:new Date().toISOString()};
-    cacheSnapshot(payload);
-    if(!serverOnline)return Promise.resolve();
+  function readSnapshot() {
+    try { return JSON.parse(localStorage.getItem(RECOVERY_KEY) || 'null'); } catch (_) { return null; }
+  }
 
-    queue=queue.then(async()=>{
-      try{
-        const r=await fetch('/api/db',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});
-        if(!r.ok)throw new Error('Save failed');
-      }catch(e){
-        serverOnline=false;
-        const st=document.getElementById('serverStatus');
-        if(st)st.textContent='● Database connection lost — local recovery copy retained';
+  window.persistDB = function () {
+    let snapshot;
+    try { snapshot = clone(window.db); } catch (_) { return writeChain; }
+    version = Math.max(version + 1, Date.now());
+    snapshot._meta = { version, savedAt: new Date().toISOString() };
+    cacheSnapshot(snapshot);
+
+    writeChain = writeChain.then(async () => {
+      try {
+        const r = await fetch('/api/db', {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(snapshot),
+          cache: 'no-store',
+          keepalive: true
+        });
+        if (!r.ok) throw new Error('save failed');
+        setStatus('● Local database connected');
+      } catch (_) {
+        cacheSnapshot(snapshot);
+        setStatus('● Saved locally; database retrying');
       }
     });
-    return queue;
+    return writeChain;
   };
 
-  const originalLoadServerDB=loadServerDB;
-  window.loadServerDB=async function(){
-    const cached=readCache();
-    try{await originalLoadServerDB();}catch(e){}
-    const cacheVersion=Number(cached?._meta?.version||0);
-    const serverVersion=Number(db?._meta?.version||0);
-    if(cached && cacheVersion>serverVersion && Array.isArray(cached.patients) && Array.isArray(cached.visits) && Array.isArray(cached.payments)){
-      normalizeDB(cached);
-      version=cacheVersion;
-      serverOnline=true;
-      await persistDB();
-    }else if(serverVersion>0){
-      version=serverVersion;
+  // All existing saveDB() calls in the master HTML continue to work.
+  window.saveDB = function () {
+    try { if (typeof ensureReceiptNumbers === 'function') ensureReceiptNumbers(); } catch (_) {}
+    window.persistDB();
+    try { if (typeof renderAll === 'function') renderAll(); } catch (_) {}
+    try { if (typeof updateSuggestions === 'function') updateSuggestions(); } catch (_) {}
+  };
+
+  // Restore a newer recovery snapshot if the database contains an older snapshot.
+  const originalLoad = window.loadServerDB;
+  window.loadServerDB = async function () {
+    const cached = readSnapshot();
+    try { await originalLoad(); } catch (_) {}
+    const cachedVersion = Number(cached?.version || 0);
+    const serverVersion = Number(window.db?._meta?.version || 0);
+    if (cached?.data && cachedVersion > serverVersion && Array.isArray(cached.data.patients) && Array.isArray(cached.data.visits) && Array.isArray(cached.data.payments)) {
+      normalizeDB(cached.data);
+      version = cachedVersion;
+      setStatus('● Newer local recovery copy loaded');
+      await window.persistDB();
+    } else if (serverVersion) {
+      version = serverVersion;
     }
   };
 
-  window.saveDB=function(){
-    try{ensureReceiptNumbers();}catch(e){}
-    persistDB();
-    try{renderAll();}catch(e){}
-    try{updateSuggestions();}catch(e){}
+  // Replace UTC-based date calculation with the Windows computer's local calendar date.
+  window.todayISO = function () {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
   };
 
-  // Use the Windows local calendar date, not UTC. This avoids a date rollover
-  // mismatch around midnight for Indian local time.
-  window.todayISO=function(){const d=new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return y+'-'+m+'-'+day;};
+  // Recovery checkpoint every 5 seconds. Database writes are serialized above.
+  setInterval(() => { try { window.persistDB(); } catch (_) {} }, 5000);
 
-  window.addEventListener('beforeunload',function(){try{persistDB();}catch(e){}});
+  window.addEventListener('beforeunload', () => {
+    try {
+      const snapshot = clone(window.db);
+      snapshot._meta = { version: Math.max(++version, Date.now()), savedAt: new Date().toISOString() };
+      cacheSnapshot(snapshot);
+      navigator.sendBeacon('/api/db-beacon', new Blob([JSON.stringify(snapshot)], {type:'application/json'}));
+    } catch (_) {}
+  });
 })();
