@@ -31,6 +31,7 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
+          cache-dependency-path: go.mod
 
       - name: Download Go dependencies
         shell: pwsh
@@ -81,11 +82,17 @@ jobs:
           name: Amit-Patel-Dental-Software-Windows-Installer
           path: dist/*.exe
 
-      - name: Create GitHub release on version tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish tested installer as GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Amit Patel Dental Software v1.0.${{ github.run_number }}
+          body: |
+            Tested Windows installer built from the master baseline.
+            Includes the durable local database save/recovery fix.
           files: dist/*.exe
-          generate_release_notes: true
+          generate_release_notes: false
+          make_latest: true
 
 # Automated master-baseline installer validation trigger.
