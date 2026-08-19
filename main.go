@@ -11,6 +11,7 @@ import (
     "os"
     "path/filepath"
     "strings"
+    "sync"
     "time"
 
     webview2 "github.com/jchv/go-webview2"
@@ -32,14 +33,46 @@ var emptyDB = map[string]any{
     "settings": map[string]any{"theme": "ocean", "rxWidth": 145, "rxHeight": 190, "rxTop": 0, "rxRight": 0, "rxBottom": 0, "rxLeft": 0, "doctorName": "Dr. Amit J. Patel", "clinicName": "Dr. Patel's Dental Implant Center & Clinic"},
 }
 
+// Serialize all database file access. Multiple auto-save requests can otherwise
+// write the same .tmp file concurrently and/or leave an incomplete state.
+var dbMu sync.RWMutex
+
 func dataFile() string {
     base, err := os.UserConfigDir(); if err != nil { base, _ = os.UserHomeDir() }
     dir := filepath.Join(base, "Amit Patel Dental Software"); _ = os.MkdirAll(dir, 0700)
     return filepath.Join(dir, "patient-data.json")
 }
-func ensureDB(p string) { if _, err := os.Stat(p); err == nil { return }; b, _ := json.MarshalIndent(emptyDB, "", "  "); _ = os.WriteFile(p, b, 0600) }
-func readDB(p string) []byte { b, err := os.ReadFile(p); if err != nil { b, _ = json.Marshal(emptyDB) }; return b }
-func writeDB(p string, r io.Reader) error { var v any; if err := json.NewDecoder(r).Decode(&v); err != nil { return err }; b, _ := json.MarshalIndent(v, "", "  "); tmp := p + ".tmp"; if err := os.WriteFile(tmp, b, 0600); err != nil { return err }; return os.Rename(tmp, p) }
+func ensureDB(p string) {
+    dbMu.Lock(); defer dbMu.Unlock()
+    if _, err := os.Stat(p); err == nil { return }
+    b, _ := json.MarshalIndent(emptyDB, "", "  ")
+    _ = os.WriteFile(p, b, 0600)
+}
+func readDB(p string) []byte {
+    dbMu.RLock(); defer dbMu.RUnlock()
+    b, err := os.ReadFile(p); if err != nil { b, _ = json.Marshal(emptyDB) }
+    return b
+}
+func writeDB(p string, r io.Reader) error {
+    dbMu.Lock(); defer dbMu.Unlock()
+
+    var v any
+    if err := json.NewDecoder(r).Decode(&v); err != nil { return err }
+    b, err := json.MarshalIndent(v, "", "  "); if err != nil { return err }
+
+    // Use a unique temporary file and replace atomically. This prevents one
+    // auto-save from overwriting another request's temporary file.
+    dir := filepath.Dir(p)
+    _ = os.MkdirAll(dir, 0700)
+    tmp, err := os.CreateTemp(dir, "patient-data-*.tmp"); if err != nil { return err }
+    tmpName := tmp.Name()
+    defer os.Remove(tmpName)
+    if err := tmp.Chmod(0600); err != nil { tmp.Close(); return err }
+    if _, err := tmp.Write(b); err != nil { tmp.Close(); return err }
+    if err := tmp.Sync(); err != nil { tmp.Close(); return err }
+    if err := tmp.Close(); err != nil { return err }
+    return os.Rename(tmpName, p)
+}
 
 func buildHTML() string {
     svg := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(appIconSVG)
@@ -52,7 +85,15 @@ func main() {
     mux := http.NewServeMux()
     mux.HandleFunc("/api/db", func(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Access-Control-Allow-Origin", "*"); w.Header().Set("Content-Type", "application/json")
-        switch r.Method { case http.MethodGet: _, _ = w.Write(readDB(db)); case http.MethodPut: if err := writeDB(db, r.Body); err != nil { http.Error(w, `{"ok":false}`, http.StatusBadRequest); return }; _, _ = w.Write([]byte(`{"ok":true}`)); default: http.Error(w, "method not allowed", http.StatusMethodNotAllowed) }
+        switch r.Method {
+        case http.MethodGet:
+            _, _ = w.Write(readDB(db))
+        case http.MethodPut:
+            if err := writeDB(db, r.Body); err != nil { http.Error(w, `{"ok":false}`, http.StatusBadRequest); return }
+            _, _ = w.Write([]byte(`{"ok":true}`))
+        default:
+            http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+        }
     })
     mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { if r.URL.Path != "/" && r.URL.Path != "/index.html" { http.NotFound(w, r); return }; w.Header().Set("Content-Type", "text/html; charset=utf-8"); _, _ = io.WriteString(w, pageHTML) })
     ln, err := net.Listen("tcp", "127.0.0.1:0"); if err != nil { panic(err) }
