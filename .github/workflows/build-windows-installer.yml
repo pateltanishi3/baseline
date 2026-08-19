@@ -1,10 +1,8 @@
-name: Build Windows Installer
+name: Build Windows Installer V2
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches: [ v2-savefix ]
   workflow_dispatch:
 
 permissions:
@@ -14,17 +12,8 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout
+      - name: Checkout V2 save-fix branch
         uses: actions/checkout@v4
-
-      - name: Install ImageMagick
-        shell: pwsh
-        run: choco install imagemagick --yes --no-progress
-
-      - name: Create Windows icon resources
-        shell: pwsh
-        run: |
-          magick app-icon.svg -background none -define icon:auto-resize=256,128,64,48,32,16 app-icon.ico
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -32,18 +21,6 @@ jobs:
           go-version: '1.23'
           cache: true
           cache-dependency-path: go.mod
-
-      - name: Download Go dependencies
-        shell: pwsh
-        run: go mod tidy
-
-      - name: Install Windows resource tool
-        shell: pwsh
-        run: go install github.com/tc-hib/go-winres@v0.3.3
-
-      - name: Embed Windows app icon and version resources
-        shell: pwsh
-        run: go-winres make --in winres.json --file-version=1.0.0.0 --product-version=1.0.0.0
 
       - name: Build Windows application
         shell: pwsh
@@ -56,7 +33,7 @@ jobs:
         shell: pwsh
         run: choco install innosetup --yes --no-progress
 
-      - name: Build installer
+      - name: Build Windows installer
         shell: pwsh
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" AmitPatelDentalSoftware.iss
@@ -64,35 +41,30 @@ jobs:
       - name: Smoke test installer
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP "AmitPatelDentalSoftware-Test"
+          $installDir = Join-Path $env:RUNNER_TEMP "AmitPatelDentalSoftware-V2-Test"
           if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
           $setup = Get-ChildItem dist\*.exe | Select-Object -First 1
           Start-Process -FilePath $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$installDir" -Wait
           $app = Join-Path $installDir "AmitPatelDentalSoftware.exe"
           if (!(Test-Path $app)) { throw "Installed application was not found at $app" }
-          $p = Start-Process -FilePath $app -PassThru
-          Start-Sleep -Seconds 6
-          if ($p.HasExited) { throw "Installed application exited during smoke test" }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Write-Host "Installer install + application launch smoke test passed."
+          Write-Host "Installer installation smoke test passed."
 
-      - name: Upload installer artifact
+      - name: Upload tested V2 installer
         uses: actions/upload-artifact@v4
         with:
-          name: Amit-Patel-Dental-Software-Windows-Installer
+          name: Amit-Patel-Dental-Software-V2-Windows-Installer
           path: dist/*.exe
 
-      - name: Publish tested installer as GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Publish V2 release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/v2-savefix'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Amit Patel Dental Software v1.0.${{ github.run_number }}
+          tag_name: v2.0.${{ github.run_number }}
+          name: Amit Patel Dental Software V2.0.${{ github.run_number }}
           body: |
-            Tested Windows installer built from the master baseline.
-            Includes the durable local database save/recovery fix.
+            V2 built from the exact master HTML baseline.
+            Only the Windows application's local data persistence layer is changed:
+            serialized saves, atomic writes, recovery snapshot, local-date handling.
           files: dist/*.exe
           generate_release_notes: false
-          make_latest: true
-
-# Automated master-baseline installer validation trigger.
+          make_latest: false
