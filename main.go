@@ -26,6 +26,9 @@ var brandingJS []byte
 //go:embed app-icon.svg
 var appIconSVG []byte
 
+//go:embed save-fix.js
+var saveFixJS []byte
+
 var emptyDB = map[string]any{
     "patients": []any{}, "visits": []any{}, "payments": []any{}, "appointments": []any{},
     "suggestions": map[string]any{"complaint": []any{}, "diagnosis": []any{}, "treatment": []any{}, "instructions": []any{}},
@@ -33,8 +36,6 @@ var emptyDB = map[string]any{
     "settings": map[string]any{"theme": "ocean", "rxWidth": 145, "rxHeight": 190, "rxTop": 0, "rxRight": 0, "rxBottom": 0, "rxLeft": 0, "doctorName": "Dr. Amit J. Patel", "clinicName": "Dr. Patel's Dental Implant Center & Clinic"},
 }
 
-// Serialize all database file access. Multiple auto-save requests can otherwise
-// write the same .tmp file concurrently and/or leave an incomplete state.
 var dbMu sync.RWMutex
 
 func dataFile() string {
@@ -42,28 +43,29 @@ func dataFile() string {
     dir := filepath.Join(base, "Amit Patel Dental Software"); _ = os.MkdirAll(dir, 0700)
     return filepath.Join(dir, "patient-data.json")
 }
-func ensureDB(p string) {
-    dbMu.Lock(); defer dbMu.Unlock()
-    if _, err := os.Stat(p); err == nil { return }
-    b, _ := json.MarshalIndent(emptyDB, "", "  ")
-    _ = os.WriteFile(p, b, 0600)
-}
-func readDB(p string) []byte {
-    dbMu.RLock(); defer dbMu.RUnlock()
-    b, err := os.ReadFile(p); if err != nil { b, _ = json.Marshal(emptyDB) }
-    return b
-}
+func ensureDB(p string) { dbMu.Lock(); defer dbMu.Unlock(); if _, err := os.Stat(p); err == nil { return }; b, _ := json.MarshalIndent(emptyDB, "", "  "); _ = os.WriteFile(p, b, 0600) }
+func readDB(p string) []byte { dbMu.RLock(); defer dbMu.RUnlock(); b, err := os.ReadFile(p); if err != nil { b, _ = json.Marshal(emptyDB) }; return b }
 func writeDB(p string, r io.Reader) error {
     dbMu.Lock(); defer dbMu.Unlock()
-
     var v any
     if err := json.NewDecoder(r).Decode(&v); err != nil { return err }
+    // Reject a stale snapshot when a newer version is already on disk.
+    if incoming, ok := v.(map[string]any); ok {
+        incomingMeta, _ := incoming["_meta"].(map[string]any)
+        incomingVersion, _ := incomingMeta["version"].(float64)
+        if incomingVersion > 0 {
+            if current, err := os.ReadFile(p); err == nil {
+                var currentObj map[string]any
+                if json.Unmarshal(current, &currentObj) == nil {
+                    currentMeta, _ := currentObj["_meta"].(map[string]any)
+                    currentVersion, _ := currentMeta["version"].(float64)
+                    if currentVersion > incomingVersion { return nil }
+                }
+            }
+        }
+    }
     b, err := json.MarshalIndent(v, "", "  "); if err != nil { return err }
-
-    // Use a unique temporary file and replace atomically. This prevents one
-    // auto-save from overwriting another request's temporary file.
-    dir := filepath.Dir(p)
-    _ = os.MkdirAll(dir, 0700)
+    dir := filepath.Dir(p); _ = os.MkdirAll(dir, 0700)
     tmp, err := os.CreateTemp(dir, "patient-data-*.tmp"); if err != nil { return err }
     tmpName := tmp.Name()
     defer os.Remove(tmpName)
@@ -77,7 +79,9 @@ func writeDB(p string, r io.Reader) error {
 func buildHTML() string {
     svg := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(appIconSVG)
     js := strings.ReplaceAll(string(brandingJS), "__APP_LOGO_DATA__", fmt.Sprintf("%q", svg))
-    return strings.Replace(string(indexHTML), "</body>", "<script>"+js+"</script></body>", 1)
+    saveFix := string(saveFixJS)
+    html := strings.Replace(string(indexHTML), "</body>", "<script>"+js+"</script><script>"+saveFix+"</script></body>", 1)
+    return html
 }
 
 func main() {
