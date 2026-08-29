@@ -29,6 +29,12 @@ var appIconSVG []byte
 //go:embed save-fix.js
 var saveFixJS []byte
 
+//go:embed receipt-host-fix.js
+var receiptHostFixJS []byte
+
+//go:embed receipt-settings.js
+var receiptSettingsJS []byte
+
 var emptyDB = map[string]any{
     "patients": []any{}, "visits": []any{}, "payments": []any{}, "appointments": []any{},
     "suggestions": map[string]any{"complaint": []any{}, "diagnosis": []any{}, "treatment": []any{}, "instructions": []any{}},
@@ -49,7 +55,6 @@ func writeDB(p string, r io.Reader) error {
     dbMu.Lock(); defer dbMu.Unlock()
     var v any
     if err := json.NewDecoder(r).Decode(&v); err != nil { return err }
-    // Reject a stale snapshot when a newer version is already on disk.
     if incoming, ok := v.(map[string]any); ok {
         incomingMeta, _ := incoming["_meta"].(map[string]any)
         incomingVersion, _ := incomingMeta["version"].(float64)
@@ -67,8 +72,7 @@ func writeDB(p string, r io.Reader) error {
     b, err := json.MarshalIndent(v, "", "  "); if err != nil { return err }
     dir := filepath.Dir(p); _ = os.MkdirAll(dir, 0700)
     tmp, err := os.CreateTemp(dir, "patient-data-*.tmp"); if err != nil { return err }
-    tmpName := tmp.Name()
-    defer os.Remove(tmpName)
+    tmpName := tmp.Name(); defer os.Remove(tmpName)
     if err := tmp.Chmod(0600); err != nil { tmp.Close(); return err }
     if _, err := tmp.Write(b); err != nil { tmp.Close(); return err }
     if err := tmp.Sync(); err != nil { tmp.Close(); return err }
@@ -80,7 +84,9 @@ func buildHTML() string {
     svg := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(appIconSVG)
     js := strings.ReplaceAll(string(brandingJS), "__APP_LOGO_DATA__", fmt.Sprintf("%q", svg))
     saveFix := string(saveFixJS)
-    html := strings.Replace(string(indexHTML), "</body>", "<script>"+js+"</script><script>"+saveFix+"</script></body>", 1)
+    receiptHostFix := string(receiptHostFixJS)
+    receiptSettings := string(receiptSettingsJS)
+    html := strings.Replace(string(indexHTML), "</body>", "<script>"+js+"</script><script>"+saveFix+"</script><script>"+receiptHostFix+"</script><script>"+receiptSettings+"</script></body>", 1)
     return html
 }
 
