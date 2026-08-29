@@ -29,6 +29,9 @@ var appIconSVG []byte
 //go:embed save-fix.js
 var saveFixJS []byte
 
+//go:embed receipt-host-fix.js
+var receiptHostFixJS []byte
+
 //go:embed receipt-settings.js
 var receiptSettingsJS []byte
 
@@ -81,8 +84,9 @@ func buildHTML() string {
     svg := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(appIconSVG)
     js := strings.ReplaceAll(string(brandingJS), "__APP_LOGO_DATA__", fmt.Sprintf("%q", svg))
     saveFix := string(saveFixJS)
+    receiptHostFix := string(receiptHostFixJS)
     receiptSettings := string(receiptSettingsJS)
-    html := strings.Replace(string(indexHTML), "</body>", "<script>"+js+"</script><script>"+saveFix+"</script><script>"+receiptSettings+"</script></body>", 1)
+    html := strings.Replace(string(indexHTML), "</body>", "<script>"+js+"</script><script>"+saveFix+"</script><script>"+receiptHostFix+"</script><script>"+receiptSettings+"</script></body>", 1)
     return html
 }
 
