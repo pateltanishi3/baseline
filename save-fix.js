@@ -1,64 +1,28 @@
-// Durable-save layer injected by the Windows wrapper.
-// It serializes snapshots, keeps a recovery copy, and prevents a stale
-// auto-save from replacing a newer manual save.
+// Durable local-save layer. Persistence is deliberately independent from UI rendering.
 (function(){
+  'use strict';
   const CACHE_KEY='amit_patel_dental_save_cache_v1';
-  let version=0;
-  let queue=Promise.resolve();
-
-  function cloneDB(){
-    try{return JSON.parse(JSON.stringify(db));}catch(e){return null;}
-  }
-  function cacheSnapshot(payload){try{localStorage.setItem(CACHE_KEY,JSON.stringify(payload));}catch(e){}}
+  let version=0, queue=Promise.resolve(), saving=false;
+  function cloneDB(){try{return JSON.parse(JSON.stringify(db));}catch(e){return null;}}
+  function cacheSnapshot(p){try{localStorage.setItem(CACHE_KEY,JSON.stringify(p));}catch(e){}}
   function readCache(){try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'null');}catch(e){return null;}}
-
   window.persistDB=function(){
-    const payload=cloneDB();
-    if(!payload)return Promise.resolve();
-    const next=Math.max(++version,Date.now());
-    payload._meta={version:next,savedAt:new Date().toISOString()};
-    cacheSnapshot(payload);
-    if(!serverOnline)return Promise.resolve();
-
-    queue=queue.then(async()=>{
-      try{
-        const r=await fetch('/api/db',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),keepalive:true});
-        if(!r.ok)throw new Error('Save failed');
-      }catch(e){
-        serverOnline=false;
-        const st=document.getElementById('serverStatus');
-        if(st)st.textContent='● Database connection lost — local recovery copy retained';
-      }
-    });
-    return queue;
+    const payload=cloneDB(); if(!payload)return Promise.resolve();
+    payload._meta={version:Math.max(++version,Date.now()),savedAt:new Date().toISOString()};
+    version=payload._meta.version; cacheSnapshot(payload);
+    if(!serverOnline||saving)return Promise.resolve();
+    queue=queue.then(async()=>{saving=true;try{const r=await fetch('/api/db',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('Save failed');}catch(e){serverOnline=false;const st=document.getElementById('serverStatus');if(st)st.textContent='● Database connection lost — local recovery copy retained';}finally{saving=false;}}); return queue;
   };
-
-  const originalLoadServerDB=loadServerDB;
-  window.loadServerDB=async function(){
-    const cached=readCache();
-    try{await originalLoadServerDB();}catch(e){}
-    const cacheVersion=Number(cached?._meta?.version||0);
-    const serverVersion=Number(db?._meta?.version||0);
-    if(cached && cacheVersion>serverVersion && Array.isArray(cached.patients) && Array.isArray(cached.visits) && Array.isArray(cached.payments)){
-      normalizeDB(cached);
-      version=cacheVersion;
-      serverOnline=true;
-      await persistDB();
-    }else if(serverVersion>0){
-      version=serverVersion;
-    }
+  const originalLoadServerDB=window.loadServerDB;
+  if(typeof originalLoadServerDB==='function') window.loadServerDB=async function(){
+    const cached=readCache(); try{await originalLoadServerDB();}catch(e){}
+    const cv=Number(cached?._meta?.version||0),sv=Number(db?._meta?.version||0);
+    if(cached&&cv>sv&&Array.isArray(cached.patients)&&Array.isArray(cached.visits)&&Array.isArray(cached.payments)){
+      normalizeDB(cached);version=cv;serverOnline=true;
+      const payload=cloneDB();if(payload)await fetch('/api/db',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(()=>{});
+    }else if(sv>0)version=sv;
   };
-
-  window.saveDB=function(){
-    try{ensureReceiptNumbers();}catch(e){}
-    persistDB();
-    try{renderAll();}catch(e){}
-    try{updateSuggestions();}catch(e){}
-  };
-
-  // Use the Windows local calendar date, not UTC. This avoids a date rollover
-  // mismatch around midnight for Indian local time.
-  window.todayISO=function(){const d=new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return y+'-'+m+'-'+day;};
-
-  window.addEventListener('beforeunload',function(){try{persistDB();}catch(e){}});
+  window.saveDB=function(){try{ensureReceiptNumbers();}catch(e){} return persistDB();};
+  window.todayISO=function(){const d=new Date(),y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;};
+  window.addEventListener('beforeunload',()=>{try{persistDB();}catch(e){}});
 })();
